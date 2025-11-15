@@ -1,0 +1,27 @@
+{
+  "name": "@futurehax/semantic-release-foundry-plugin",
+  "version": "1.0.0",
+  "description": "Semantic Release plugin for Foundry VTT modules with GCS CDN support",
+  "main": "index.js",
+  "keywords": [
+    "semantic-release",
+    "foundry-vtt",
+    "foundryvtt",
+    "gcs",
+    "cdn"
+  ],
+  "author": "FutureHax",
+  "license": "MIT",
+  "peerDependencies": {
+    "semantic-release": ">=20.0.0"
+  },
+  "dependencies": {
+    "archiver": "^7.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FutureHax/github-workflows.git",
+    "directory": "plugins/foundry-semantic-release"
+  }
+}
+
