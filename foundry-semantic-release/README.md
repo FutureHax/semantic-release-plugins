@@ -69,7 +69,7 @@ module.exports = {
 
 #### Optional - GCS CDN
 - **`GCS_BUCKET_NAME`**: Google Cloud Storage bucket name
-- **`CDN_DOMAIN`**: Custom domain for CDN (default: `download.r2plays.games`)
+- **`CDN_DOMAIN`**: Custom domain for CDN (default: `downloads.r2plays.games`)
   - If `GCS_BUCKET_NAME` is set, uploads to: `gs://{bucket}/futurehax/{packageId}/v{version}/`
   - Files accessible at: `https://{domain}/futurehax/{packageId}/v{version}/`
 
@@ -77,7 +77,7 @@ module.exports = {
 
 ### URL Generation Priority
 
-1. **If GCS_BUCKET_NAME + CDN_DOMAIN set**: Uses `https://download.r2plays.games/futurehax/{packageId}/v{version}/`
+1. **If GCS_BUCKET_NAME + CDN_DOMAIN set**: Uses `https://downloads.r2plays.games/futurehax/{packageId}/v{version}/`
 2. **If only GCS_BUCKET_NAME**: Uses `https://storage.googleapis.com/{bucket}/futurehax/{packageId}/v{version}/`
 3. **Fallback**: Uses `https://github.com/{owner}/{repo}/releases/download/v{version}/`
 
