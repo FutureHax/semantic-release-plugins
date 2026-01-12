@@ -25,7 +25,7 @@ async function prepare(pluginConfig, context) {
 
   // Check if CDN is configured
   const gcsBucket = process.env.GCS_BUCKET_NAME;
-  const customDomain = process.env.CDN_DOMAIN || "downloads.futurehax.com";
+  const customDomain = process.env.CDN_DOMAIN || "download.r2plays.games";
   const packageId = pluginConfig.packageId || "scattered-seafloor";
 
   if (gcsBucket && customDomain) {
@@ -118,7 +118,7 @@ async function publish(pluginConfig, context) {
 
   // Upload to GCS CDN if bucket is configured (do this first, independent of Foundry API)
   const gcsBucket = process.env.GCS_BUCKET_NAME;
-  const customDomain = process.env.CDN_DOMAIN || "downloads.futurehax.com";
+  const customDomain = process.env.CDN_DOMAIN || "download.r2plays.games";
 
   if (gcsBucket) {
     logger.log(`Uploading artifacts to GCS CDN...`);
