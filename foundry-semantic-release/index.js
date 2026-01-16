@@ -29,18 +29,19 @@ async function prepare(pluginConfig, context) {
   const packageId = pluginConfig.packageId || "scattered-seafloor";
 
   if (gcsBucket && customDomain) {
-    // Use CDN URLs - self-contained like alpha-5
-    moduleJson.manifest = `https://${customDomain}/futurehax/${packageId}/v${version}/module.json`;
+    // Use CDN URLs - manifest points to latest so Foundry can detect updates
+    // Download points to versioned zip for specific version
+    moduleJson.manifest = `https://${customDomain}/futurehax/${packageId}/latest/module.json`;
     moduleJson.download = `https://${customDomain}/futurehax/${packageId}/v${version}/module.zip`;
     logger.log(`Using CDN URLs with domain: ${customDomain}`);
   } else if (gcsBucket) {
     // Fallback to direct GCS URLs if custom domain not configured
-    moduleJson.manifest = `https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/v${version}/module.json`;
+    moduleJson.manifest = `https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/latest/module.json`;
     moduleJson.download = `https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/v${version}/module.zip`;
     logger.log(`Using direct GCS URLs with bucket: ${gcsBucket}`);
   } else {
     // Fallback to GitHub release URLs if CDN not configured
-    moduleJson.manifest = `${githubUrl}/${repositoryPath}/releases/download/v${version}/module.json`;
+    moduleJson.manifest = `${githubUrl}/${repositoryPath}/releases/latest/download/module.json`;
     moduleJson.download = `${githubUrl}/${repositoryPath}/releases/download/v${version}/module.zip`;
     logger.log(`Using GitHub release URLs (CDN not configured)`);
   }
@@ -206,13 +207,14 @@ async function publish(pluginConfig, context) {
   const moduleJson = JSON.parse(moduleContent);
 
   // Prepare the release data with CDN URLs if available
+  // Use latest manifest URL so Foundry can detect updates
   let manifestUrl;
   if (gcsBucket && customDomain) {
-    manifestUrl = `https://${customDomain}/futurehax/${packageId}/v${version}/module.json`;
+    manifestUrl = `https://${customDomain}/futurehax/${packageId}/latest/module.json`;
   } else if (gcsBucket) {
-    manifestUrl = `https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/v${version}/module.json`;
+    manifestUrl = `https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/latest/module.json`;
   } else {
-    manifestUrl = `${githubUrl}/${repositoryPath}/releases/download/v${version}/module.json`;
+    manifestUrl = `${githubUrl}/${repositoryPath}/releases/latest/download/module.json`;
   }
 
   const releaseData = {
