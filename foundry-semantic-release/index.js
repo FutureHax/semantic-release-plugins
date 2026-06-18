@@ -223,7 +223,9 @@ async function publish(pluginConfig, context) {
     release: {
       version: version,
       manifest: manifestUrl,
-      notes: `${githubUrl}/${repositoryPath}/releases/tag/v${version}`,
+      notes: gcsBucket && customDomain
+        ? `https://${customDomain}/futurehax/${packageId}/CHANGELOG.md`
+        : `${githubUrl}/${repositoryPath}/releases/tag/v${version}`,
       compatibility: moduleJson.compatibility || {
         minimum: "12",
         verified: "12",
@@ -320,3 +322,4 @@ async function success(pluginConfig, context) {
 }
 
 module.exports = { prepare, publish, success };
+
