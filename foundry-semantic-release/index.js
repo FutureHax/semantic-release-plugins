@@ -23,14 +23,19 @@ async function prepare(pluginConfig, context) {
   // Update version
   moduleJson.version = version;
 
-  // Check if CDN is configured
   const gcsBucket = process.env.GCS_BUCKET_NAME;
   const customDomain = process.env.CDN_DOMAIN || "downloads.r2plays.games";
   const packageId = pluginConfig.packageId || "scattered-seafloor";
+  const manifestBaseUrl = process.env.MANIFEST_BASE_URL;
 
-  if (gcsBucket && customDomain) {
-    // Use CDN URLs - manifest points to latest so Foundry can detect updates
-    // Download points to versioned zip for specific version
+  if (manifestBaseUrl) {
+    moduleJson.manifest = `${manifestBaseUrl}/${packageId}`;
+    moduleJson.download = `${manifestBaseUrl.replace("/manifest", "/download")}/${packageId}/v${version}`;
+    if (gcsBucket && customDomain) {
+      moduleJson.changelog = `https://${customDomain}/futurehax/${packageId}/CHANGELOG.md`;
+    }
+    logger.log(`Using CMS proxy URLs (MANIFEST_BASE_URL): ${manifestBaseUrl}`);
+  } else if (gcsBucket && customDomain) {
     moduleJson.manifest = `https://${customDomain}/futurehax/${packageId}/latest/module.json`;
     moduleJson.download = `https://${customDomain}/futurehax/${packageId}/v${version}/module.zip`;
     logger.log(`Using CDN URLs with domain: ${customDomain}`);
@@ -192,8 +197,14 @@ async function publish(pluginConfig, context) {
     logger.log("GCS_BUCKET_NAME not set, skipping CDN upload");
   }
 
-  // Check if Foundry API token is configured
+  const skipFoundryApi = process.env.SKIP_FOUNDRY_API === "true";
   const foundryToken = process.env.PACKAGE_RELEASE_TOKEN;
+
+  if (skipFoundryApi) {
+    logger.log("SKIP_FOUNDRY_API=true, skipping Foundry VTT package update");
+    return;
+  }
+
   if (!foundryToken) {
     logger.log(
       "PACKAGE_RELEASE_TOKEN not set, skipping Foundry VTT package update",
