@@ -122,79 +122,63 @@ async function publish(pluginConfig, context) {
   const packageId = pluginConfig.packageId || "scattered-seafloor";
   const dryRun = pluginConfig.dryRun || false;
 
-  // Upload to GCS CDN if bucket is configured (do this first, independent of Foundry API)
+  const manifestBaseUrl = process.env.MANIFEST_BASE_URL;
   const gcsBucket = process.env.GCS_BUCKET_NAME;
+  const gcsPrivateBucket = process.env.GCS_PRIVATE_BUCKET_NAME;
+  const uploadBucket = manifestBaseUrl && gcsPrivateBucket ? gcsPrivateBucket : gcsBucket;
   const customDomain = process.env.CDN_DOMAIN || "downloads.r2plays.games";
 
-  if (gcsBucket) {
-    logger.log(`Uploading artifacts to GCS CDN...`);
+  if (uploadBucket) {
+    const isPrivate = !!(manifestBaseUrl && gcsPrivateBucket);
+    logger.log(`Uploading artifacts to GCS ${isPrivate ? "private" : "CDN"} bucket (${uploadBucket})...`);
 
     try {
-      // Ensure module.zip and module.json exist
       const moduleZipPath = path.join(process.cwd(), "module.zip");
       const moduleJsonPath = path.join(process.cwd(), "module.json");
 
       if (!fs.existsSync(moduleZipPath)) {
         logger.warn("module.zip not found, skipping GCS upload");
       } else {
-        // Upload versioned artifacts (self-contained, immutable)
         execSync(
-          `gsutil -q cp ${moduleZipPath} gs://${gcsBucket}/futurehax/${packageId}/v${version}/`,
+          `gsutil -q cp ${moduleZipPath} gs://${uploadBucket}/futurehax/${packageId}/v${version}/`,
           { stdio: "inherit" },
         );
         execSync(
-          `gsutil -q cp ${moduleJsonPath} gs://${gcsBucket}/futurehax/${packageId}/v${version}/`,
+          `gsutil -q cp ${moduleJsonPath} gs://${uploadBucket}/futurehax/${packageId}/v${version}/`,
           { stdio: "inherit" },
         );
-
-        // Set cache headers for versioned files (1 year - immutable)
         execSync(
-          `gsutil -m setmeta -h "Cache-Control:public, max-age=31536000, immutable" "gs://${gcsBucket}/futurehax/${packageId}/v${version}/**"`,
+          `gsutil -m setmeta -h "Cache-Control:public, max-age=31536000, immutable" "gs://${uploadBucket}/futurehax/${packageId}/v${version}/**"`,
           { stdio: "inherit" },
         );
 
-        // Create /latest/ pointer that points to this version
         execSync(
-          `gsutil -q cp ${moduleZipPath} gs://${gcsBucket}/futurehax/${packageId}/latest/`,
+          `gsutil -q cp ${moduleZipPath} gs://${uploadBucket}/futurehax/${packageId}/latest/`,
           { stdio: "inherit" },
         );
         execSync(
-          `gsutil -q cp ${moduleJsonPath} gs://${gcsBucket}/futurehax/${packageId}/latest/`,
+          `gsutil -q cp ${moduleJsonPath} gs://${uploadBucket}/futurehax/${packageId}/latest/`,
           { stdio: "inherit" },
         );
-
-        // Set no-cache headers for latest files
         execSync(
-          `gsutil -m setmeta -h "Cache-Control:no-cache, no-store, must-revalidate" "gs://${gcsBucket}/futurehax/${packageId}/latest/**"`,
+          `gsutil -m setmeta -h "Cache-Control:no-cache, no-store, must-revalidate" "gs://${uploadBucket}/futurehax/${packageId}/latest/**"`,
           { stdio: "inherit" },
         );
 
-        logger.log(`✓ Artifacts uploaded to CDN`);
-        logger.log(
-          `  Versioned module.json: https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/v${version}/module.json`,
-        );
-        logger.log(
-          `  Versioned module.zip: https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/v${version}/module.zip`,
-        );
-        logger.log(
-          `  Latest manifest: https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/latest/module.json (points to v${version} zip)`,
-        );
+        logger.log(`✓ Artifacts uploaded to ${isPrivate ? "private" : "CDN"} bucket`);
+        logger.log(`  Versioned: gs://${uploadBucket}/futurehax/${packageId}/v${version}/`);
+        logger.log(`  Latest: gs://${uploadBucket}/futurehax/${packageId}/latest/`);
 
-        if (customDomain) {
-          logger.log(
-            `  CDN Latest: https://${customDomain}/futurehax/${packageId}/latest/module.json`,
-          );
-          logger.log(
-            `  CDN Version: https://${customDomain}/futurehax/${packageId}/v${version}/module.zip`,
-          );
+        if (!isPrivate && customDomain) {
+          logger.log(`  CDN Latest: https://${customDomain}/futurehax/${packageId}/latest/module.json`);
+          logger.log(`  CDN Version: https://${customDomain}/futurehax/${packageId}/v${version}/module.zip`);
         }
       }
     } catch (error) {
       logger.warn("Failed to upload to GCS:", error.message);
-      // Don't fail the release if GCS upload fails
     }
   } else {
-    logger.log("GCS_BUCKET_NAME not set, skipping CDN upload");
+    logger.log("GCS_BUCKET_NAME not set, skipping GCS upload");
   }
 
   const skipFoundryApi = process.env.SKIP_FOUNDRY_API === "true";
