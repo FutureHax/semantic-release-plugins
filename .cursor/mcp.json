@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "gortex": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "cd /Users/marvin/Workspace/semantic-release-plugins && exec /opt/homebrew/bin/gortex mcp --tools full --tools-mode defer"
+      ],
+      "env": {
+        "GORTEX_INDEX_WORKERS": "8"
+      }
+    }
+  }
+}
