@@ -60,46 +60,48 @@ module.exports = {
 
 ### Environment Variables
 
-#### Required
-- **`GITHUB_REPOSITORY`**: Auto-set by GitHub Actions
-
 #### Optional - Foundry VTT API
 - **`PACKAGE_RELEASE_TOKEN`**: Foundry VTT package release token (starts with `fvttp_`)
-  - If not set, skips Foundry API update but still creates release
+- **`SKIP_FOUNDRY_API`**: Set to `true` to skip the Foundry listing update
+- **`FOUNDRY_PROTECTED`**: Set to `true` for Foundry-hosted premium packages. Builds `module-foundry.zip` with `protected: true`, no `download` field, and `manifest` `https://r2.foundryvtt.com/packages-public/{packageId}/module.json`. The JSON release API records that R2 URL; upload `module-foundry.zip` with Foundry's Premium Content Uploader so Foundry can host it.
 
-#### Optional - GCS CDN
+#### Optional - GCS / CMS
 - **`GCS_BUCKET_NAME`**: Google Cloud Storage bucket name
+- **`GCS_PRIVATE_BUCKET_NAME`**: Private bucket used when `MANIFEST_BASE_URL` is set
 - **`CDN_DOMAIN`**: Custom domain for CDN (default: `downloads.r2plays.games`)
-  - If `GCS_BUCKET_NAME` is set, uploads to: `gs://{bucket}/futurehax/{packageId}/v{version}/`
-  - Files accessible at: `https://{domain}/futurehax/{packageId}/v{version}/`
+- **`MANIFEST_BASE_URL`**: CMS proxy base (catalog zip keeps `download` URLs)
 
 ## Behavior
 
-### URL Generation Priority
+### Dual artifacts (premium Hub)
 
-1. **If GCS_BUCKET_NAME + CDN_DOMAIN set**: Uses `https://downloads.r2plays.games/futurehax/{packageId}/v{version}/`
-2. **If only GCS_BUCKET_NAME**: Uses `https://storage.googleapis.com/{bucket}/futurehax/{packageId}/v{version}/`
-3. **Fallback**: Uses `https://github.com/{owner}/{repo}/releases/download/v{version}/`
+When `FOUNDRY_PROTECTED=true` and Foundry API is not skipped:
+
+1. `module.zip` / `module.json` stay the catalog/CMS package (includes `download`).
+2. `module-foundry.zip` / `module-foundry.json` are the Hub package (R2 manifest, `protected: true`, no `download`).
+3. GCS upload is the catalog zip only.
+4. Source `foundry_vtt/module.json` is rewritten to the catalog shape (`protected` false) and is not committed as `protected: true`.
+
+### URL Generation Priority (catalog zip)
+
+1. **If MANIFEST_BASE_URL set**: CMS proxy manifest/download
+2. **If GCS_BUCKET_NAME + CDN_DOMAIN set**: `https://downloads.r2plays.games/futurehax/{packageId}/latest/module.json`
+3. **If only GCS_BUCKET_NAME**: direct GCS `latest/module.json`
+4. **Fallback**: GitHub `releases/latest/download/module.json`
 
 ### GCS Upload
 
-When `GCS_BUCKET_NAME` is set, uploads:
+When `GCS_BUCKET_NAME` is set, uploads the catalog zip:
 - **Versioned**: `gs://{bucket}/futurehax/{packageId}/v{version}/` (1 year cache, immutable)
 - **Latest**: `gs://{bucket}/futurehax/{packageId}/latest/` (no-cache)
 
 ### Foundry API Update
 
-When `PACKAGE_RELEASE_TOKEN` is set, updates the Foundry VTT package listing with the manifest URL.
-
-## Workflow Integration
-
-Works with the `foundry-module-semantic-release.yml` workflow from this repository.
-
-See [alpha-5-module](https://github.com/FutureHax/alpha-5-module) for a complete example.
+When `PACKAGE_RELEASE_TOKEN` is set, updates the Foundry VTT package listing. Protected packages send the R2 manifest URL.
 
 ## Lifecycle Hooks
 
-- **`prepare`**: Updates `module.json`, creates `module.zip`
-- **`publish`**: Uploads to GCS CDN (if configured), updates Foundry API (if token set)
-- **`success`**: Cleans up temporary files (`module.json`, `module.zip`)
+- **`prepare`**: Updates catalog `module.json`, creates `module.zip`, and optionally `module-foundry.zip`
+- **`publish`**: Uploads catalog artifacts to GCS, updates Foundry API
+- **`success`**: Leaves artifacts in place for the reusable workflow
 

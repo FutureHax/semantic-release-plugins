@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Semantic Release plugin for Foundry VTT modules with GCS CDN support",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test protected.test.js"
+  },
   "keywords": [
     "semantic-release",
     "foundry-vtt",
