@@ -34,6 +34,18 @@ Or reference directly in `.releaserc.js` using URL:
 
 For Foundry VTT modules using the `foundry-module-semantic-release.yml` workflow, the plugin is automatically downloaded at build time.
 
+### itch.io Semantic Release Plugin
+
+Publishes configurable artifact globs to itch.io channels through Butler.
+
+**Directory:** `itchio-semantic-release/`
+
+**Documentation:** [itchio-semantic-release/README.md](./itchio-semantic-release/README.md)
+
+The reusable Electron workflow downloads this plugin automatically when
+`use-itchio: true`. Consumers configure the itch.io `owner/game` project and a
+channel-to-glob map in their Semantic Release configuration.
+
 ## Contributing
 
 To update a plugin:

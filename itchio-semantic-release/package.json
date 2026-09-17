@@ -1,0 +1,28 @@
+{
+  "name": "@futurehax/semantic-release-itchio-plugin",
+  "version": "1.0.0",
+  "description": "Semantic Release plugin for publishing release artifacts to itch.io with Butler",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test index.test.js"
+  },
+  "keywords": [
+    "semantic-release",
+    "itch.io",
+    "butler",
+    "electron"
+  ],
+  "author": "FutureHax",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "peerDependencies": {
+    "semantic-release": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FutureHax/semantic-release-plugins.git",
+    "directory": "itchio-semantic-release"
+  }
+}
