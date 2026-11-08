@@ -97,11 +97,13 @@ When `GCS_BUCKET_NAME` is set, uploads the catalog zip:
 
 ### Foundry API Update
 
-When `PACKAGE_RELEASE_TOKEN` is set, updates the Foundry VTT package listing. Protected packages send the R2 manifest URL.
+Unless `SKIP_FOUNDRY_API=true`, updates the Foundry VTT package listing and fails the release when it can't: `verifyConditions` fails before tagging if `PACKAGE_RELEASE_TOKEN` is empty, and an API error (non-2xx, `"status": "error"`, or a thrown request) is recorded in `foundry-release-status.json` during `publish` and fails the run from `success`, after the GitHub release exists. A 429 is retried once after `Retry-After`; Foundry's `unique_together` (version already exists) counts as success, so re-publishing is safe. Under `semantic-release --dry-run`, `verifyRelease` sends a Foundry API dry run. Protected packages send the R2 manifest URL.
 
 ## Lifecycle Hooks
 
+- **`verifyConditions`**: Fails when Foundry publishing is enabled and `PACKAGE_RELEASE_TOKEN` is empty
+- **`verifyRelease`**: Under `--dry-run`, validates the release with a Foundry API dry run
 - **`prepare`**: Updates catalog `module.json`, creates `module.zip`, and optionally `module-foundry.zip`
-- **`publish`**: Uploads catalog artifacts to GCS, updates Foundry API
-- **`success`**: Leaves artifacts in place for the reusable workflow
+- **`publish`**: Uploads catalog artifacts to GCS, updates Foundry API, writes `foundry-release-status.json`
+- **`success`**: Leaves artifacts in place for the reusable workflow; fails the run if the Foundry update failed
 

@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const archiver = require("archiver");
 const { promisify } = require("util");
 const { execSync } = require("child_process");
 const writeFile = promisify(fs.writeFile);
@@ -11,6 +10,181 @@ const {
   foundryReleaseManifestUrl,
   isFoundryProtected,
 } = require("./protected.js");
+
+// Kept in this file: workflows download index.js on its own.
+const FOUNDRY_RELEASE_API_URL = "https://api.foundryvtt.com/_api/packages/release_version/";
+const STATUS_FILE = "foundry-release-status.json";
+const DEFAULT_RETRY_AFTER_SECONDS = 60;
+const MAX_RETRY_AFTER_SECONDS = 120;
+const TRANSIENT_RETRY_SECONDS = 5;
+
+class FoundryReleaseError extends Error {
+  constructor(message, { code = "EFOUNDRYRELEASE", details, status } = {}) {
+    super(message);
+    this.name = "SemanticReleaseError";
+    this.semanticRelease = true;
+    this.code = code;
+    this.details = details;
+    this.status = status;
+  }
+}
+
+function foundryApiEnabled(env = process.env) {
+  return env.SKIP_FOUNDRY_API !== "true";
+}
+
+function releaseToken(env = process.env) {
+  return (env.PACKAGE_RELEASE_TOKEN || "").trim();
+}
+
+function missingTokenError() {
+  return new FoundryReleaseError("PACKAGE_RELEASE_TOKEN is not set but Foundry publishing is enabled.", {
+    code: "ENOFOUNDRYTOKEN",
+    details: [
+      "SKIP_FOUNDRY_API is not true, so this release must update the foundryvtt.com package listing.",
+      "Add a PACKAGE_RELEASE_TOKEN repository secret (Package Release Token on the package's Foundry edit page)",
+      "and pass it to the release job (`secrets: inherit` for the reusable workflow).",
+      "Premium or unlisted modules should set `skip-foundry-api: true` instead.",
+    ].join(" "),
+  });
+}
+
+function assertFoundryToken(env = process.env) {
+  if (foundryApiEnabled(env) && !releaseToken(env)) {
+    throw missingTokenError();
+  }
+}
+
+function parseBody(text) {
+  try {
+    return JSON.parse(text);
+  } catch (_e) {
+    return { raw: text };
+  }
+}
+
+function errorEntries(data) {
+  if (!data || typeof data !== "object" || !data.errors || typeof data.errors !== "object") return [];
+  return Object.values(data.errors).flatMap((value) => (Array.isArray(value) ? value : [value]));
+}
+
+/** Foundry rejects a re-sent package+version with 400 `unique_together`; the listing already has it. */
+function isAlreadyReleased(data) {
+  return errorEntries(data).some(
+    (entry) =>
+      (entry && entry.code === "unique_together") ||
+      /already exists/i.test(typeof entry === "string" ? entry : (entry && entry.message) || ""),
+  );
+}
+
+function isErrorBody(data) {
+  return Boolean(data && typeof data === "object" && (data.status === "error" || errorEntries(data).length > 0));
+}
+
+function describeBody(data) {
+  if (data && typeof data === "object" && "raw" in data) return String(data.raw).slice(0, 500);
+  return JSON.stringify(data).slice(0, 500);
+}
+
+function retryAfterSeconds(response) {
+  const header = response.headers && response.headers.get ? response.headers.get("Retry-After") : null;
+  const seconds = Number.parseInt(header || "", 10);
+  const wait = Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_RETRY_AFTER_SECONDS;
+  return Math.min(wait + 1, MAX_RETRY_AFTER_SECONDS);
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * POST one release to the Foundry Package Release API.
+ *
+ * Resolves `{ outcome: "published" | "dry-run" | "already-exists", data }`. Rejects with a
+ * FoundryReleaseError on a missing token, a non-2xx or `"status": "error"` response, or a thrown
+ * request. A 429, 5xx, or network error is retried once (after Retry-After for 429).
+ */
+async function publishFoundryRelease({
+  token,
+  payload,
+  logger = console,
+  fetchImpl = globalThis.fetch,
+  sleep = defaultSleep,
+}) {
+  if (!token || !String(token).trim()) throw missingTokenError();
+
+  const label = `${payload.id} v${payload.release && payload.release.version}`;
+  const dryRun = Boolean(payload["dry-run"]);
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const isLastAttempt = attempt === 2;
+    let response;
+    try {
+      response = await fetchImpl(FOUNDRY_RELEASE_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: String(token).trim() },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      if (!isLastAttempt) {
+        logger.warn(
+          `Foundry API request for ${label} threw (${error.message}); retrying in ${TRANSIENT_RETRY_SECONDS}s`,
+        );
+        await sleep(TRANSIENT_RETRY_SECONDS * 1000);
+        continue;
+      }
+      throw new FoundryReleaseError(`Foundry API request for ${label} failed: ${error.message}`, {
+        code: "EFOUNDRYREQUEST",
+      });
+    }
+
+    const data = parseBody(await response.text());
+
+    if (response.ok && !isErrorBody(data)) {
+      return { outcome: dryRun ? "dry-run" : "published", data };
+    }
+
+    if (isAlreadyReleased(data)) {
+      return { outcome: "already-exists", data };
+    }
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (retryable && !isLastAttempt) {
+      const wait = response.status === 429 ? retryAfterSeconds(response) : TRANSIENT_RETRY_SECONDS;
+      logger.warn(`Foundry API returned ${response.status} for ${label}; retrying once in ${wait}s`);
+      await sleep(wait * 1000);
+      continue;
+    }
+
+    throw new FoundryReleaseError(`Foundry API rejected ${label}: HTTP ${response.status} ${describeBody(data)}`, {
+      code: "EFOUNDRYAPI",
+      status: response.status,
+    });
+  }
+
+  throw new FoundryReleaseError(`Foundry API request for ${label} did not complete`);
+}
+
+function writeFoundryReleaseStatus(status, cwd = process.cwd()) {
+  fs.writeFileSync(path.join(cwd, STATUS_FILE), JSON.stringify(status, null, 2) + "\n");
+}
+
+async function verifyConditions(_pluginConfig, context) {
+  const { logger } = context;
+  if (!foundryApiEnabled()) {
+    logger.log("SKIP_FOUNDRY_API=true, the Foundry VTT package listing will not be updated");
+    return;
+  }
+  assertFoundryToken();
+  logger.log("PACKAGE_RELEASE_TOKEN is set, the Foundry VTT package listing will be updated on release");
+}
+
+async function verifyRelease(pluginConfig, context) {
+  const { nextRelease, logger, options } = context;
+  if (!(options && options.dryRun) || !foundryApiEnabled()) return;
+
+  const { payload } = await foundryReleasePayload(pluginConfig, nextRelease.version, { dryRun: true });
+  const result = await publishFoundryRelease({ token: releaseToken(), payload, logger });
+  logger.log(`✓ Foundry API dry run accepted ${payload.id} v${nextRelease.version} (${result.outcome})`);
+}
 
 async function prepare(pluginConfig, context) {
   const { nextRelease, logger } = context;
@@ -71,6 +245,8 @@ function createModuleZip(version, logger, { destName, moduleJson }) {
   const payload = { ...moduleJson, version };
   logger.log(`Creating ${destName} with version ${version}`);
 
+  // Loaded lazily so the Foundry publish path can be unit-tested without consumer dependencies.
+  const archiver = require("archiver");
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(path.join(process.cwd(), destName));
     const archive = archiver("zip", { zlib: { level: 9 } });
@@ -100,22 +276,15 @@ async function publish(pluginConfig, context) {
   const { nextRelease, logger } = context;
   const { version } = nextRelease;
 
-  const githubUrl = pluginConfig.githubUrl || "https://github.com";
-  const repositoryPath =
-    pluginConfig.repositoryPath || "FutureHax/scattered-seafloor-module";
-  const dryRun = pluginConfig.dryRun || false;
-
   const manifestBaseUrl = process.env.MANIFEST_BASE_URL;
   const gcsBucket = process.env.GCS_BUCKET_NAME;
   const gcsPrivateBucket = process.env.GCS_PRIVATE_BUCKET_NAME;
   const uploadBucket = manifestBaseUrl && gcsPrivateBucket ? gcsPrivateBucket : gcsBucket;
-  const customDomain = process.env.CDN_DOMAIN || "downloads.r2plays.games";
 
   const modulePath = path.join(process.cwd(), "foundry_vtt", "module.json");
   const moduleContent = await readFile(modulePath, "utf8");
   const moduleJson = JSON.parse(moduleContent);
   const packageId = pluginConfig.packageId || moduleJson.id || "scattered-seafloor";
-  const protectedHub = isFoundryProtected();
 
   if (uploadBucket) {
     const isPrivate = !!(manifestBaseUrl && gcsPrivateBucket);
@@ -165,18 +334,23 @@ async function publish(pluginConfig, context) {
     logger.log("GCS_BUCKET_NAME not set, skipping GCS upload");
   }
 
-  const skipFoundryApi = process.env.SKIP_FOUNDRY_API === "true";
-  const foundryToken = process.env.PACKAGE_RELEASE_TOKEN;
-
-  if (skipFoundryApi) {
-    logger.log("SKIP_FOUNDRY_API=true, skipping Foundry VTT package update");
-    return;
+  // Recorded instead of thrown so @semantic-release/github still creates the release for the pushed tag.
+  const foundry = await publishFoundryListing(pluginConfig, version, logger);
+  writeFoundryReleaseStatus({ version, ...foundry });
+  if (foundry.outcome === "failed" && process.env.GITHUB_ACTIONS === "true") {
+    console.log(`::error title=Foundry listing not updated::${foundry.message}`);
   }
+}
 
-  if (!foundryToken) {
-    logger.log("PACKAGE_RELEASE_TOKEN not set, skipping Foundry VTT package update");
-    return;
-  }
+async function foundryReleasePayload(pluginConfig, version, { dryRun = pluginConfig.dryRun || false } = {}) {
+  const githubUrl = pluginConfig.githubUrl || "https://github.com";
+  const repositoryPath = pluginConfig.repositoryPath || "FutureHax/scattered-seafloor-module";
+  const gcsBucket = process.env.GCS_BUCKET_NAME;
+  const customDomain = process.env.CDN_DOMAIN || "downloads.r2plays.games";
+  const modulePath = path.join(process.cwd(), "foundry_vtt", "module.json");
+  const moduleJson = JSON.parse(await readFile(modulePath, "utf8"));
+  const packageId = pluginConfig.packageId || moduleJson.id || "scattered-seafloor";
+  const protectedHub = isFoundryProtected();
 
   const catalogManifestUrl =
     gcsBucket && customDomain
@@ -185,18 +359,12 @@ async function publish(pluginConfig, context) {
         ? `https://storage.googleapis.com/${gcsBucket}/futurehax/${packageId}/latest/module.json`
         : `${githubUrl}/${repositoryPath}/releases/latest/download/module.json`;
 
-  const manifestUrl = foundryReleaseManifestUrl({
-    protectedHub,
-    packageId,
-    catalogManifestUrl,
-  });
-
-  const releaseData = {
+  const payload = {
     id: packageId,
     "dry-run": dryRun,
     release: {
       version: version,
-      manifest: manifestUrl,
+      manifest: foundryReleaseManifestUrl({ protectedHub, packageId, catalogManifestUrl }),
       notes:
         gcsBucket && customDomain
           ? `https://${customDomain}/futurehax/${packageId}/CHANGELOG.md`
@@ -208,7 +376,16 @@ async function publish(pluginConfig, context) {
       },
     },
   };
+  return { payload, packageId, protectedHub };
+}
 
+async function publishFoundryListing(pluginConfig, version, logger) {
+  if (!foundryApiEnabled()) {
+    logger.log("SKIP_FOUNDRY_API=true, skipping Foundry VTT package update");
+    return { outcome: "skipped" };
+  }
+
+  const { payload, packageId, protectedHub } = await foundryReleasePayload(pluginConfig, version);
   logger.log(`Updating Foundry VTT package listing for ${packageId} v${version}...`);
   if (protectedHub) {
     logger.log(
@@ -217,58 +394,52 @@ async function publish(pluginConfig, context) {
   }
 
   try {
-    const response = await fetch("https://api.foundryvtt.com/_api/packages/release_version/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: foundryToken,
-      },
-      body: JSON.stringify(releaseData),
-    });
-
-    let responseData;
-    const responseText = await response.text();
-
-    try {
-      responseData = JSON.parse(responseText);
-    } catch {
-      responseData = { error: responseText };
-    }
-
-    if (response.ok) {
-      if (dryRun) {
-        logger.log(`✓ Foundry API dry run successful: ${responseData.message || "Success"}`);
-      } else {
-        logger.log(`✓ Successfully updated Foundry VTT package listing!`);
-        if (responseData.page) {
-          logger.log(`  Package page: ${responseData.page}`);
-        }
-      }
+    const { outcome, data } = await publishFoundryRelease({ token: releaseToken(), payload, logger });
+    if (outcome === "already-exists") {
+      logger.log(`✓ Foundry VTT listing already has ${packageId} v${version}; nothing to do`);
+    } else if (outcome === "dry-run") {
+      logger.log(`✓ Foundry API dry run successful: ${data.message || "Success"}`);
     } else {
-      logger.error(
-        `Failed to update Foundry VTT package listing: ${response.status} ${response.statusText}`,
-      );
-      if (typeof responseData === "object") {
-        logger.error(`Response: ${JSON.stringify(responseData, null, 2)}`);
-      } else {
-        logger.error(`Response: ${responseText}`);
-      }
-
-      if (response.status === 429) {
-        const retryAfter = response.headers.get("Retry-After");
-        logger.warn(`Rate limited. Retry after ${retryAfter} seconds`);
+      logger.log(`✓ Successfully updated Foundry VTT package listing!`);
+      if (data.page) {
+        logger.log(`  Package page: ${data.page}`);
       }
     }
+    return { outcome, packageId };
   } catch (error) {
-    logger.error("Error calling Foundry VTT API:", error.message);
+    logger.error(`Failed to update Foundry VTT package listing: ${error.message}`);
+    return { outcome: "failed", packageId, message: error.message, code: error.code };
   }
 }
 
-async function success(pluginConfig, context) {
+async function success(_pluginConfig, context) {
   const { logger } = context;
   logger.log(
     "Leaving module.zip, module.json, and any module-foundry.* artifacts in place for downstream steps.",
   );
+
+  const statusPath = path.join(process.cwd(), STATUS_FILE);
+  const status = fs.existsSync(statusPath) ? JSON.parse(fs.readFileSync(statusPath, "utf8")) : null;
+  if (status && status.outcome === "failed") {
+    throw new FoundryReleaseError(`Released v${status.version}, but the Foundry VTT listing was not updated.`, {
+      code: status.code || "EFOUNDRYAPI",
+      details: [
+        status.message,
+        "The git tag and GitHub release are in place. Re-publishing the same version is safe (Foundry answers",
+        "`already exists` once it has it), for example with the foundry MCP `foundry_release_version` tool.",
+      ].join(" "),
+    });
+  }
 }
 
-module.exports = { prepare, publish, success };
+module.exports = {
+  verifyConditions,
+  verifyRelease,
+  prepare,
+  publish,
+  success,
+  foundryReleasePayload,
+  publishFoundryRelease,
+  isAlreadyReleased,
+  STATUS_FILE,
+};
